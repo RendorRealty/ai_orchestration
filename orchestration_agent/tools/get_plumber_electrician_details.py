@@ -9,6 +9,90 @@ load_dotenv()
 # Load API key from environment
 GOOGLE_PLACE_KEY = os.getenv("GOOGLE_PLACE_KEY")
 
+def get_coordinates_from_address(address: str) -> Dict[str, Any]:
+    """
+    Convert an address string to longitude and latitude coordinates.
+    
+    Args:
+        address: The address string to geocode (e.g., "123 Main St, San Francisco, CA")
+    
+    Returns:
+        Dictionary containing latitude, longitude, and additional location details
+    """
+    if not GOOGLE_PLACE_KEY:
+        return {
+            "success": False,
+            "error": "Google Places API key not found",
+            "message": "GOOGLE_PLACE_KEY environment variable is not set"
+        }
+    
+    if not address or not address.strip():
+        return {
+            "success": False,
+            "error": "Invalid address",
+            "message": "Address string cannot be empty"
+        }
+    
+    try:
+        # Use Google Geocoding API to get coordinates
+        geocoding_url = "https://maps.googleapis.com/maps/api/geocode/json"
+        params = {
+            'address': address.strip(),
+            'key': GOOGLE_PLACE_KEY
+        }
+        
+        response = requests.get(geocoding_url, params=params, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if data.get('status') != 'OK':
+            return {
+                "success": False,
+                "error": f"Geocoding API error: {data.get('status', 'UNKNOWN')}",
+                "message": data.get('error_message', 'Failed to geocode address'),
+                "address": address
+            }
+        
+        if not data.get('results'):
+            return {
+                "success": False,
+                "error": "No results found",
+                "message": "No coordinates found for the provided address",
+                "address": address
+            }
+        
+        # Get the first (best) result
+        result = data['results'][0]
+        location = result['geometry']['location']
+        
+        return {
+            "success": True,
+            "latitude": location['lat'],
+            "longitude": location['lng'],
+            "formatted_address": result['formatted_address'],
+            "address_components": result.get('address_components', []),
+            "place_id": result.get('place_id'),
+            "location_type": result['geometry'].get('location_type'),
+            "viewport": result['geometry'].get('viewport'),
+            "input_address": address
+        }
+        
+    except requests.exceptions.RequestException as e:
+        return {
+            "success": False,
+            "error": "Network request failed",
+            "message": f"Failed to connect to Google Geocoding API: {str(e)}",
+            "address": address
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": "Unexpected error",
+            "message": f"An unexpected error occurred: {str(e)}",
+            "address": address
+        }
+
 PLACES_NEARBY_URL = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
 PLACE_DETAILS_URL = "https://maps.googleapis.com/maps/api/place/details/json"
 
@@ -67,13 +151,12 @@ def get_place_details(api_key: str, place_id: str, fields: Optional[List[str]] =
     result = data.get("result", {})
     return result
 
-def get_nearest_trades(latitude: float, longitude: float, max_per_category: int = 10) -> Union[Dict[str, List[Dict]], Dict[str, str]]:
+def get_nearest_trades(address: str, max_per_category: int = 10) -> Union[Dict[str, List[Dict]], Dict[str, str]]:
     """
     Find nearest plumbers and electricians using Google Places API.
     
     Args:
-        latitude: The latitude coordinate of the location to search around
-        longitude: The longitude coordinate of the location to search around
+        address: The address to search around
         max_per_category: Maximum number of results to return per category (default: 10)
     
     Returns:
@@ -89,7 +172,15 @@ def get_nearest_trades(latitude: float, longitude: float, max_per_category: int 
     if not GOOGLE_PLACE_KEY:
         return {"error": "GOOGLE_PLACE_KEY not found in environment variables"}
     
-    location = (latitude, longitude)
+    geo_result = get_coordinates_from_address(address)
+    if not geo_result.get("success"):
+        return {"error": f"Failed to geocode address: {geo_result.get('message', '')}"}
+
+    latitude = geo_result.get("latitude")
+    longitude = geo_result.get("longitude")
+    if latitude is None or longitude is None:
+        return {"error": "Latitude or longitude not found for the provided address."}
+    location = (float(latitude), float(longitude))
     categories = {"plumbers": "plumber", "electricians": "electrician"}
     out: Dict[str, Any] = {}
 
